@@ -1,0 +1,229 @@
+Пример запроса на сервер
+
+func addUserToCall(callId: Int64, userPhoneNumber: String) {
+        let requestURL = ServerAddressConstants.COMPANY_SERVER_ADDRESS + ServerAddressConstants.CALLS_ADDRESS + "/\(callId)"
+        let loginToken = UserDefaults.standard.object(forKey: "logintoken") as! String
+        let header: HTTPHeaders = ["Authorization": loginToken]
+        let parameters = ["id": callId, "phone": userPhoneNumber] as [String: Any]
+
+        AF.request(requestURL, method: .put, parameters: parameters, headers: header).responseJSON { (response) in
+            guard let status = response.response?.statusCode else { return }
+            switch status {
+            case 200:
+                print("User \(userPhoneNumber) added to call \(callId)")
+            case 401:
+                let service = Service()
+                service.refreshToken()
+            case 403:
+                print("token validation is failed")
+            case 404:
+                print("Not Found")
+            case 425:
+                print("incorrect limit or offset")
+            default:
+                print("ok")
+            }
+        }
+    }
+
+Пример использования Realm для кэширования
+
+	minChats = try! Realm().objects(ChatModelMini.self).filter("collective = false").sorted {
+            first, second in
+            let format = ISO8601DateFormatter()
+            format.formatOptions = [.withFullDate, .withFullTime, .withTimeZone, .withFractionalSeconds]
+            let f1 = first.lastDate!
+            let f2 = second.lastDate!
+            let date1 = format.date(from: f1)!
+            let date2 = format.date(from: f2)!
+            return date1 > date2
+    }
+    self.chatTableView.reloadData()
+
+		//**//**//**//
+
+	let db = try! Realm()
+    try! db.write {
+       db.delete(db.objects(ChatModelMini.self).filter("collective = false"))
+    }
+    for i in 0..<self.chats.count {
+       let db = try! Realm()
+       try! db.write {
+           let model = ChatModelMini(id: self.chats[i].id!, lastMessage: nil, name: self.chats[i].name, image: self.chats[i].image, lastDate: self.chats[i].createDate)
+           db.add(model, update: .all)
+       }
+       self.getChatting(chatid: self.chats[i].id!)
+       DispatchQueue.global(qos: .userInitiated).async {
+           self.getLastMessage(chatid: self.chats[i].id!)
+       }
+       self.lastMessages[self.chats[i].id!] = self.chats[i].lastMessage
+       if self.showingChats[i].image != nil {
+           FilesService.shared.getFileById(id: self.showingChats[i].image!.id)
+       }
+
+     }
+     self.orderTable()
+     self.chatTableView.reloadData()
+     self.activityindicator.stopAnimating()
+     self.activityView.isHidden = true
+
+Реализация аудиозвонков
+
+func joinSession() {
+        let httpClient = HttpClient()
+        httpClient.connectToSession {(success, error, token, _) in
+            if (error) != nil {
+                debugPrint("ERROR in HttpRequest: \(String(describing: error))")
+                return
+            }
+            if success {
+                // Initialize our session object
+                self.session = Session(id: JSONConstants.SESSION_ID, token: token, webSocketClient: self.webSocketClient, delegate: self)
+                self.webSocketClient.setSession(session: self.session!)
+
+                // Initialize our local participant and start local camera
+                self.localParticipant = LocalParticipant(participantName: "localParticipant")
+                self.localParticipant?.setVideoEnabled(isEnabled: false)
+                self.localParticipant?.setPeerConnection(pcf: (self.session?.getPeerConnectionFactory())!, pc: (self.session?.getPeerConection())!)
+                self.session?.setLocalParticipant(participant: self.localParticipant!)
+                DispatchQueue.main.async { [self] in
+                    self.callNotifyReqest(id: self.callId!, type: "CONNECT")
+                    self.startLocalAudio()
+                    self.webSocketClient.joinRoom(token: token)
+                }
+            }
+        }
+    }
+
+
+extension AudioCallViewController {
+
+    private func startLocalAudio() {
+        self.localParticipant?.createMediaSenders()
+    }
+
+    func endCall() {
+        self.player?.stop()
+        self.callNotifyReqest(id: self.callId!, type: "DISCONNECT")
+        self.webSocketClient.leaveRoom()
+
+        try! AVAudioSession.sharedInstance().setMode(.default)
+        if let call = AudioCallViewController.currentCall {
+            AppDelegate.shared.callManager.end(call: call)
+            AudioCallViewController.currentCall?.hasEnded = true
+        }
+        AudioCallViewController.call = nil
+        AudioCallViewController.currentCall = nil
+        self.dismiss(animated: true) { [self] in
+            if delegate != nil {
+                delegate!.dismissMe()
+            }
+        }
+    }
+
+    @IBAction func endcalltapped(_ sender: Any) {
+        endCall()
+    }
+
+    @IBAction func backbtnPressed(_ sender: UIButton) {
+        self.player?.stop()
+        self.callNotifyReqest(id: self.callId!, type: "DISCONNECT")
+        if swiftStomp.isConnected {
+            swiftStomp.delegate = nil
+            swiftStomp = nil
+        }
+        self.webSocketClient.leaveRoom()
+        self.dismiss(animated: true) { [self] in
+            if delegate != nil {
+                delegate!.dismissMe()
+            }
+        }
+    }
+
+    @IBAction func addmoreUserstapped(_ sender: UIButton) {
+        let addUserToCallViewController: AddUserToCallViewController = UIStoryboard(name: "Main", bundle: nil).instantiateViewController(withIdentifier: "addUserToCallVC") as! AddUserToCallViewController
+        addUserToCallViewController.callId = Int64(JSONConstants.SESSION_ID)
+        addUserToCallViewController.modalPresentationStyle = .formSheet
+        self.present(addUserToCallViewController, animated: true, completion: nil)
+    }
+
+    @IBAction func mutemictapped(_ sender: UIButton) {
+        if self.audioMuted {
+            self.localParticipant?.setAudioEnabled(isEnabled: true)
+            sender.setImage(UIImage(named: "turn_off_micro")!, for: UIControl.State.normal)
+        } else {
+            self.localParticipant?.setAudioEnabled(isEnabled: false)
+            sender.setImage(UIImage(named: "micro_off")!, for: UIControl.State.normal)
+        }
+        self.audioMuted = !self.audioMuted
+    }
+
+    @IBAction func mutespeakerstapped(_ sender: UIButton) {
+        if self.isSpeakerOff {
+            do {
+                try audioSession?.setCategory(.playAndRecord, mode: .default)
+            } catch {}
+            self.localParticipant!.speakerOn()
+            sender.setImage(UIImage(named: "speaker_off")!, for: UIControl.State.normal)
+        } else {
+            do {
+                try audioSession?.setCategory(.playAndRecord, mode: .default, options: [.defaultToSpeaker])
+            } catch {}
+            self.localParticipant!.speakerOff()
+            sender.setImage(UIImage(named: "speaker")!, for: UIControl.State.normal)
+        }
+        self.isSpeakerOff = !self.isSpeakerOff
+    }
+}
+
+extension AudioCallViewController: SessionDelegate {
+    func remoteParticipantTracksAdded(_ remoteParticipant: RemoteParticipant) {
+        let participants: [RemoteParticipant] = (self.session?.getAllRemoteParticipants())!
+        print("participants.count = \(participants.count)")
+        DispatchQueue.main.async {
+            if participants.count > 1 {
+                self.personalCall = false
+                self.fullnameLabel.text = "Групповой звонок"
+            }
+            AudioCallViewController.currentCall?.hasConnected = true
+            self.player?.stop()
+            if self.callTimer == nil {
+                self.callTimer = Timer.scheduledTimer(timeInterval: 1.0, target: self, selector: #selector(self.updateTimer), userInfo: nil, repeats: true)
+                self.callTimer?.tolerance = 0.1
+            }
+            #if arch(arm64)
+            // Using metal (arm64 only)
+            let remoteRenderer = RTCMTLVideoView(frame: self.view.frame)
+            remoteRenderer.videoContentMode = .scaleAspectFit
+            #else
+            // Using OpenGLES for the rest
+            let remoteRenderer = RTCEAGLVideoView(frame: self.view.frame)
+            #endif
+
+            remoteParticipant.videoTrack?.add(remoteRenderer)
+        }
+    }
+
+    func remoteParticipantRemoved(_ remoteParticipant: RemoteParticipant) {
+        print("REMOVED PARTICIPANT ", remoteParticipant.getConnectionId())
+        let participants: [RemoteParticipant] = (self.session?.getAllRemoteParticipants())!
+
+        if participants.count == 0 && self.callTimer != nil {
+            self.callNotifyReqest(id: self.callId!, type: "DISCONNECT")
+            self.webSocketClient.leaveRoom()
+            self.endCall()
+            self.dismiss(animated: true) { [self] in
+                if delegate != nil {
+                    delegate!.dismissMe()
+                }
+            }
+        }
+    }
+
+    func remoteParticipantAdded(_ remoteParticipant: RemoteParticipant) {
+        print("remote Participant added")
+    }
+
+}
+
+
